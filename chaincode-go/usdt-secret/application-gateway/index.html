@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Private USDT Vault</title>
+    <style>
+        /* Dark Mode Theme */
+        body { font-family: 'Courier New', monospace; background: #0d1117; color: #c9d1d9; padding: 40px; }
+        .container { display: flex; gap: 20px; max-width: 1000px; margin: 0 auto; height: 500px; }
+        
+        /* Left Panel: Controls */
+        .controls { flex: 1; background: #161b22; padding: 25px; border-radius: 8px; border: 1px solid #30363d; display: flex; flex-direction: column; }
+        h1 { color: #fff; font-size: 22px; margin-top: 0; text-align: center; border-bottom: 1px solid #30363d; padding-bottom: 15px; }
+        p { color: #8b949e; font-size: 14px; text-align: center; }
+        
+        /* Buttons */
+        .btn { display: block; width: 100%; padding: 18px; margin: 10px 0; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-family: inherit; color: white; transition: 0.2s; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }
+        .btn:hover { opacity: 0.9; transform: translateY(-2px); }
+        .btn-a { background: linear-gradient(45deg, #0e639c, #2b86c5); box-shadow: 0 4px 15px rgba(14, 99, 156, 0.4); }
+        .btn-b { background: linear-gradient(45deg, #117733, #2ea043); box-shadow: 0 4px 15px rgba(17, 119, 51, 0.4); }
+        .btn-reg { background: linear-gradient(45deg, #6f42c1, #8a63d2); box-shadow: 0 4px 15px rgba(111, 66, 193, 0.4); }
+        .btn-out { background: linear-gradient(45deg, #da3633, #f85149); box-shadow: 0 4px 15px rgba(218, 54, 51, 0.4); margin-top: auto; }
+
+        /* Right Panel: Terminal */
+        .terminal-window { flex: 1.5; background: #000; border-radius: 8px; border: 1px solid #30363d; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        .terminal-header { background: #161b22; padding: 8px 15px; font-size: 12px; color: #8b949e; border-bottom: 1px solid #30363d; display: flex; align-items: center; }
+        .dot { height: 10px; width: 10px; background-color: #bbb; border-radius: 50%; display: inline-block; margin-right: 5px; }
+        .red { background-color: #ff5f56; } .yellow { background-color: #ffbd2e; } .green { background-color: #27c93f; }
+        
+        .terminal-body { padding: 15px; overflow-y: auto; flex: 1; font-size: 13px; line-height: 1.6; }
+        .log-line { margin-bottom: 4px; opacity: 0; animation: fadeIn 0.3s forwards; }
+        @keyframes fadeIn { to { opacity: 1; } }
+        
+        /* Log Colors */
+        .ts { color: #58a6ff; margin-right: 8px; } /* Timestamp */
+        .sys { color: #8b949e; }
+        .key { color: #d2a8ff; }
+        .net { color: #79c0ff; }
+        .sec { color: #ff7b72; }
+        .success-text { color: #7ee787; font-weight: bold; }
+        
+        /* Final Result Box */
+        #result-display { margin-top: 15px; padding: 15px; background: #0d1117; border: 1px dashed #30363d; text-align: center; border-radius: 6px; display: none; }
+        .res-success { color: #7ee787; border-color: #7ee787 !important; font-size: 24px; }
+        .res-error { color: #ff7b72; border-color: #ff7b72 !important; font-size: 18px; }
+
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="controls">
+            <h1>🔐 USDT Reserve Vault</h1>
+            <p>Hyperledger Fabric Private Data</p>
+            
+            <button class="btn btn-a" onclick="runDemo('BankA')">🔑 Login: Bank A</button>
+            <button class="btn btn-b" onclick="runDemo('BankB')">🔑 Login: Bank B</button>
+            <button class="btn btn-reg" onclick="runDemo('Regulator')">⚖️ Login: Regulator</button>
+            <button class="btn btn-out" onclick="runDemo('Outsider')">🕵️ Login: Outsider</button>
+
+            <div id="result-display"></div>
+        </div>
+
+        <div class="terminal-window">
+            <div class="terminal-header">
+                <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+                <span style="margin-left: 10px;">fabric-peer-logs — bash</span>
+            </div>
+            <div class="terminal-body" id="term-body">
+                <div class="log-line"><span class="ts">[SYSTEM]</span> Ready. Waiting for secure connection...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function runDemo(user) {
+            const term = document.getElementById('term-body');
+            const resBox = document.getElementById('result-display');
+            
+            // Reset UI
+            term.innerHTML = '';
+            resBox.style.display = 'none';
+            resBox.className = '';
+
+            try {
+                // Fetch Data
+                const response = await fetch(`http://localhost:3000/api/balance?user=${user}`);
+                const data = await response.json();
+
+                // Animate Logs (The "Typer" effect)
+                let delay = 0;
+                data.logs.forEach(log => {
+                    setTimeout(() => {
+                        const time = new Date().toLocaleTimeString('en-US', {hour12: false});
+                        
+                        // Color coding based on content
+                        let cssClass = 'sys';
+                        if(log.includes('[Auth]')) cssClass = 'key';
+                        if(log.includes('[Net]')) cssClass = 'net';
+                        if(log.includes('[Privacy]')) cssClass = 'success-text';
+                        if(log.includes('[Error]') || log.includes('[Peer]')) cssClass = 'sec';
+
+                        term.innerHTML += `<div class="log-line"><span class="ts">[${time}]</span> <span class="${cssClass}">${log}</span></div>`;
+                        term.scrollTop = term.scrollHeight; // Auto scroll to bottom
+                    }, delay);
+                    delay += 300; // 300ms pause between lines
+                });
+
+                // Show Result Box at end
+                setTimeout(() => {
+                    resBox.style.display = 'block';
+                    if (data.success) {
+                        resBox.innerHTML = `💵 RESERVES: ${data.data.value.toFixed(2)} USDT`;
+                        resBox.className = "res-success";
+                    } else {
+                        resBox.innerHTML = "⛔ ACCESS DENIED";
+                        resBox.className = "res-error";
+                    }
+                }, delay + 200);
+
+            } catch (err) {
+                term.innerHTML += `<div class="log-line" style="color:red">❌ CRITICAL ERROR: Server Offline</div>`;
+            }
+        }
+    </script>
+</body>
+</html>
