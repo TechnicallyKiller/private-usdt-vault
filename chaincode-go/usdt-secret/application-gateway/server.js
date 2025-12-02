@@ -8,6 +8,7 @@ const path = require('path');
 
 const app = express();
 app.use(cors());
+app.use(express.json()); // Essential for reading the file content sent from frontend
 
 // --- CONFIGURATION ---
 const channelName = 'mychannel';
@@ -20,11 +21,38 @@ const mspOrg3 = 'Org3MSP';
 const homeDir = process.env.HOME; 
 const cryptoPath = path.join(homeDir, 'fabric-samples', 'test-network', 'organizations');
 
-// --- HELPER: CONNECT WITH LOGGING ---
+// --- HELPER: Identify User based on File Content ---
+function getUserRoleFromCert(uploadedCert) {
+    try {
+        // 1. Load Bank A's Real Certificate
+        const certPathA = path.join(cryptoPath, 'peerOrganizations', 'org1.example.com', 'users', 'Admin@org1.example.com', 'msp', 'signcerts', 'Admin@org1.example.com-cert.pem');
+        const realCertA = fs.readFileSync(certPathA, 'utf8');
+
+        // 2. Load Bank B's Real Certificate
+        const certPathB = path.join(cryptoPath, 'peerOrganizations', 'org2.example.com', 'users', 'Admin@org2.example.com', 'msp', 'signcerts', 'Admin@org2.example.com-cert.pem');
+        const realCertB = fs.readFileSync(certPathB, 'utf8');
+
+        // 3. Load Regulator's Real Certificate
+        const certPathReg = path.join(cryptoPath, 'peerOrganizations', 'org3.example.com', 'users', 'Admin@org3.example.com', 'msp', 'signcerts', 'Admin@org3.example.com-cert.pem');
+        const realCertReg = fs.readFileSync(certPathReg, 'utf8');
+
+        // Normalize strings (remove whitespace/newlines for comparison)
+        const norm = (str) => str.replace(/\s+/g, '').trim();
+
+        if (norm(uploadedCert) === norm(realCertA)) return 'BankA';
+        if (norm(uploadedCert) === norm(realCertB)) return 'BankB';
+        if (norm(uploadedCert) === norm(realCertReg)) return 'Regulator';
+        
+        return 'Unknown';
+    } catch (e) {
+        console.error("Error reading cert files:", e);
+        return 'Error';
+    }
+}
+
+// --- HELPER: Connect to Fabric ---
 async function connectToNetwork(userOrg, logs) {
     let keyPath, certPath, peerEndpoint, tlsCertPath, mspId;
-
-    logs.push(`📂 [System] Locating Crypto-Materials for ${userOrg}...`);
 
     if (userOrg === 'BankA') {
         const orgPath = path.join(cryptoPath, 'peerOrganizations', 'org1.example.com');
@@ -47,8 +75,6 @@ async function connectToNetwork(userOrg, logs) {
         tlsCertPath = path.join(orgPath, 'peers', 'peer0.org3.example.com', 'tls', 'ca.crt');
         peerEndpoint = 'localhost:11051';
         mspId = mspOrg3;
-    } else {
-        throw new Error("Unknown User Identity");
     }
 
     // Read Keys
@@ -57,11 +83,10 @@ async function connectToNetwork(userOrg, logs) {
     const certPem = fs.readFileSync(certPath);
     const tlsRootCert = fs.readFileSync(tlsCertPath);
     
-    logs.push(`🔑 [Auth] Private Key Loaded: ${keyFile.substring(0, 15)}...`);
-    logs.push(`📜 [Auth] X.509 Certificate Loaded: ${path.basename(certPath)}`);
-
+    logs.push(`🔑 [Auth] Private Key Unlocked: ${keyFile.substring(0, 15)}...`);
+    
     // Connect
-    logs.push(`⚡ [Net] Establishing gRPC link to Peer @ ${peerEndpoint}`);
+    logs.push(`⚡ [Net] Dialing Peer @ ${peerEndpoint}`);
     const client = new grpc.Client(peerEndpoint, grpc.credentials.createSsl(tlsRootCert));
     const connectOptions = {
         identity: { mspId, credentials: certPem },
@@ -72,50 +97,48 @@ async function connectToNetwork(userOrg, logs) {
     return connect(connectOptions);
 }
 
-// --- API ENDPOINT ---
-app.get('/api/balance', async (req, res) => {
-    const user = req.query.user;
-    const logs = []; // We store steps here
-    console.log(`\n--- REQUEST: ${user} ---`);
+// --- MAIN LOGIN ENDPOINT ---
+app.post('/api/login-crypto', async (req, res) => {
+    const { certData } = req.body;
+    const logs = [];
     
-    logs.push(`🚀 [Init] Incoming Request: Identify as '${user}'`);
+    console.log(`\n--- NEW LOGIN ATTEMPT ---`);
+    logs.push(`📂 [System] Analyzing Uploaded X.509 Certificate...`);
 
-    if (user === 'Outsider') {
-        logs.push(`⚠️ [Policy] WARNING: User '${user}' is NOT in the Collection Policy.`);
-        logs.push(`⛔ [Peer] REJECTED: Access Denied to Private Data.`);
-        return res.json({ success: false, logs: logs, message: "Access Denied" });
+    // 1. VERIFY FILE
+    const role = getUserRoleFromCert(certData);
+
+    if (role === 'Unknown' || role === 'Error') {
+        logs.push(`❌ [Auth] CRITICAL: Certificate Signature Mismatch.`);
+        logs.push(`⛔ [Access] Denied. This ID is not trusted by the Root CA.`);
+        return res.json({ success: false, logs: logs, message: "Invalid Digital Identity" });
     }
 
-    try {
-        const gateway = await connectToNetwork(user, logs);
-        logs.push(`✅ [Net] Gateway Connected Successfully.`);
+    logs.push(`✅ [Auth] Identity Verified: ${role}`);
+    logs.push(`🔍 [System] Loading Wallet for ${role}...`);
 
+    try {
+        const gateway = await connectToNetwork(role, logs);
         const network = gateway.getNetwork(channelName);
         const contract = network.getContract(chaincodeName);
         
-        logs.push(`📡 [Chaincode] Invoking 'ReadBalance' on 'usdt-secret'...`);
-        logs.push(`🔒 [Privacy] Peer is verifying Membership Policy: OR(Org1, Org2, Org3)...`);
+        logs.push(`📡 [Chaincode] Connected. Querying 'ReadBalance'...`);
         
+        // EVALUATE TRANSACTION
         const resultBytes = await contract.evaluateTransaction('ReadBalance');
         const resultJson = JSON.parse(new TextDecoder().decode(resultBytes));
         
-        logs.push(`🔓 [Privacy] Policy Check PASSED. Decrypting data...`);
-        logs.push(`💰 [Ledger] Value Retrieved: ${resultJson.value} USDT`);
-        
-        res.json({ success: true, logs: logs, data: resultJson });
+        logs.push(`💰 [Ledger] Success. Private Data Decrypted.`);
+        res.json({ success: true, logs: logs, data: resultJson, role: role });
 
     } catch (error) {
-        console.error(error);
         logs.push(`❌ [Error] ${error.message}`);
-        logs.push(`🚫 [Peer] The peer refused to return the private data.`);
-        res.json({ success: false, logs: logs, message: "Authorization Failed" });
+        res.json({ success: false, logs: logs, message: "Query Failed" });
     }
 });
 
 // Serve HTML
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
-});
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 
 app.listen(3000, () => {
     console.log('🚀 USDT Vault Server running at http://localhost:3000');

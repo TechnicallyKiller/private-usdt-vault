@@ -54,8 +54,7 @@ This project includes an automated DevOps script to spin up the infrastructure, 
     ```
     This ensures only the 3 whitelisted organizations possess the decryption keys.
 
-## 📸 Screenshots
-*(You can add screenshots of your Green/Red terminal UI here)*
+
 
 ---
 *Built for the Hyperledger Fabric Developer assessment.*
