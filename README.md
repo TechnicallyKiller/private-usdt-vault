@@ -13,10 +13,10 @@ This solution leverages **Hyperledger Fabric Private Data Collections (PDC)** to
 The system follows a three-tier architecture:
 
 ```mermaid
-
 graph TD
     subgraph "Fabric Network (Docker)"
-        O[Orderer Node<br>(Raft Consensus)]
+        %% The fix is applied below by adding quotes around the text
+        O["Orderer Node<br>(Raft Consensus)"]
         
         subgraph "Org1 (Bank A)"
             P1[Peer0.Org1]
@@ -49,7 +49,6 @@ graph TD
     style DB1 fill:#f9f,stroke:#333,stroke-width:2px
     style DB2 fill:#f9f,stroke:#333,stroke-width:2px
     style DB3 fill:#f9f,stroke:#333,stroke-width:2px
-
 ```
 
 ### Tier 1: The Blockchain Network (Infrastructure)
