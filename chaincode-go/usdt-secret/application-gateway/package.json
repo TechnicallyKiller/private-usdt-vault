@@ -13,6 +13,7 @@
     "@grpc/grpc-js": "^1.14.1",
     "@hyperledger/fabric-gateway": "^1.7.1",
     "cors": "^2.8.5",
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "jimp": "^1.6.0"
   }
 }

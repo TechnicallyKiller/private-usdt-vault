@@ -5,141 +5,163 @@ const { connect, signers } = require('@hyperledger/fabric-gateway');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const {Jimp} = require('jimp');
 
 const app = express();
 app.use(cors());
-app.use(express.json()); // Essential for reading the file content sent from frontend
+app.use(express.json({ limit: '50mb' }));
 
-// --- CONFIGURATION ---
+// --- CONFIG ---
 const channelName = 'mychannel';
 const chaincodeName = 'usdt-secret';
-const mspOrg1 = 'Org1MSP';
-const mspOrg2 = 'Org2MSP';
-const mspOrg3 = 'Org3MSP';
+const ENCRYPTION_PASSWORD = "super_secret";
+const MAGIC_HEADER = "FABRIC_GUARD:";
 
-// Absolute Paths (Bulletproof)
 const homeDir = process.env.HOME; 
 const cryptoPath = path.join(homeDir, 'fabric-samples', 'test-network', 'organizations');
 
-// --- HELPER: Identify User based on File Content ---
-function getUserRoleFromCert(uploadedCert) {
+// --- HELPER: AES Decrypt ---
+function decrypt(text) {
     try {
-        // 1. Load Bank A's Real Certificate
-        const certPathA = path.join(cryptoPath, 'peerOrganizations', 'org1.example.com', 'users', 'Admin@org1.example.com', 'msp', 'signcerts', 'Admin@org1.example.com-cert.pem');
-        const realCertA = fs.readFileSync(certPathA, 'utf8');
+        const textParts = text.split(':');
+        const iv = Buffer.from(textParts.shift(), 'hex');
+        const encryptedText = Buffer.from(textParts.join(':'), 'hex');
+        const key = crypto.scryptSync(ENCRYPTION_PASSWORD, 'salt', 32);
+        const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+        let decrypted = decipher.update(encryptedText);
+        decrypted = Buffer.concat([decrypted, decipher.final()]);
+        return decrypted.toString();
+    } catch (e) { return null; }
+}
 
-        // 2. Load Bank B's Real Certificate
-        const certPathB = path.join(cryptoPath, 'peerOrganizations', 'org2.example.com', 'users', 'Admin@org2.example.com', 'msp', 'signcerts', 'Admin@org2.example.com-cert.pem');
-        const realCertB = fs.readFileSync(certPathB, 'utf8');
+// --- HELPER: Identify User ---
+function getUserRoleFromCert(certString) {
+    try {
+        const certA = fs.readFileSync(path.join(cryptoPath, 'peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp/signcerts/Admin@org1.example.com-cert.pem'), 'utf8');
+        const certB = fs.readFileSync(path.join(cryptoPath, 'peerOrganizations/org2.example.com/users/Admin@org2.example.com/msp/signcerts/Admin@org2.example.com-cert.pem'), 'utf8');
+        const certReg = fs.readFileSync(path.join(cryptoPath, 'peerOrganizations/org3.example.com/users/Admin@org3.example.com/msp/signcerts/Admin@org3.example.com-cert.pem'), 'utf8');
 
-        // 3. Load Regulator's Real Certificate
-        const certPathReg = path.join(cryptoPath, 'peerOrganizations', 'org3.example.com', 'users', 'Admin@org3.example.com', 'msp', 'signcerts', 'Admin@org3.example.com-cert.pem');
-        const realCertReg = fs.readFileSync(certPathReg, 'utf8');
-
-        // Normalize strings (remove whitespace/newlines for comparison)
         const norm = (str) => str.replace(/\s+/g, '').trim();
+        const target = norm(certString);
 
-        if (norm(uploadedCert) === norm(realCertA)) return 'BankA';
-        if (norm(uploadedCert) === norm(realCertB)) return 'BankB';
-        if (norm(uploadedCert) === norm(realCertReg)) return 'Regulator';
-        
-        return 'Unknown';
-    } catch (e) {
-        console.error("Error reading cert files:", e);
-        return 'Error';
-    }
+        if (target === norm(certA)) return { role: 'BankA', msp: 'Org1MSP', port: 7051, org: 'org1.example.com' };
+        if (target === norm(certB)) return { role: 'BankB', msp: 'Org2MSP', port: 9051, org: 'org2.example.com' };
+        if (target === norm(certReg)) return { role: 'Regulator', msp: 'Org3MSP', port: 11051, org: 'org3.example.com' };
+        return null;
+    } catch (e) { return null; }
 }
 
-// --- HELPER: Connect to Fabric ---
-async function connectToNetwork(userOrg, logs) {
-    let keyPath, certPath, peerEndpoint, tlsCertPath, mspId;
-
-    if (userOrg === 'BankA') {
-        const orgPath = path.join(cryptoPath, 'peerOrganizations', 'org1.example.com');
-        keyPath = path.join(orgPath, 'users', 'Admin@org1.example.com', 'msp', 'keystore');
-        certPath = path.join(orgPath, 'users', 'Admin@org1.example.com', 'msp', 'signcerts', 'Admin@org1.example.com-cert.pem');
-        tlsCertPath = path.join(orgPath, 'peers', 'peer0.org1.example.com', 'tls', 'ca.crt');
-        peerEndpoint = 'localhost:7051';
-        mspId = mspOrg1;
-    } else if (userOrg === 'BankB') {
-        const orgPath = path.join(cryptoPath, 'peerOrganizations', 'org2.example.com');
-        keyPath = path.join(orgPath, 'users', 'Admin@org2.example.com', 'msp', 'keystore');
-        certPath = path.join(orgPath, 'users', 'Admin@org2.example.com', 'msp', 'signcerts', 'Admin@org2.example.com-cert.pem');
-        tlsCertPath = path.join(orgPath, 'peers', 'peer0.org2.example.com', 'tls', 'ca.crt');
-        peerEndpoint = 'localhost:9051';
-        mspId = mspOrg2;
-    } else if (userOrg === 'Regulator') {
-        const orgPath = path.join(cryptoPath, 'peerOrganizations', 'org3.example.com');
-        keyPath = path.join(orgPath, 'users', 'Admin@org3.example.com', 'msp', 'keystore');
-        certPath = path.join(orgPath, 'users', 'Admin@org3.example.com', 'msp', 'signcerts', 'Admin@org3.example.com-cert.pem');
-        tlsCertPath = path.join(orgPath, 'peers', 'peer0.org3.example.com', 'tls', 'ca.crt');
-        peerEndpoint = 'localhost:11051';
-        mspId = mspOrg3;
-    }
-
-    // Read Keys
+async function connectToNetwork(user) {
+    const keyPath = path.join(cryptoPath, `peerOrganizations/${user.org}/users/Admin@${user.org}/msp/keystore`);
     const keyFile = fs.readdirSync(keyPath)[0];
-    const privateKeyPem = fs.readFileSync(path.join(keyPath, keyFile));
-    const certPem = fs.readFileSync(certPath);
-    const tlsRootCert = fs.readFileSync(tlsCertPath);
-    
-    logs.push(`🔑 [Auth] Private Key Unlocked: ${keyFile.substring(0, 15)}...`);
-    
-    // Connect
-    logs.push(`⚡ [Net] Dialing Peer @ ${peerEndpoint}`);
-    const client = new grpc.Client(peerEndpoint, grpc.credentials.createSsl(tlsRootCert));
-    const connectOptions = {
-        identity: { mspId, credentials: certPem },
-        signer: signers.newPrivateKeySigner(crypto.createPrivateKey(privateKeyPem)),
-        client,
-    };
+    const privateKey = fs.readFileSync(path.join(keyPath, keyFile));
+    const certPath = path.join(cryptoPath, `peerOrganizations/${user.org}/users/Admin@${user.org}/msp/signcerts/Admin@${user.org}-cert.pem`);
+    const cert = fs.readFileSync(certPath);
+    const tlsCert = fs.readFileSync(path.join(cryptoPath, `peerOrganizations/${user.org}/peers/peer0.${user.org}/tls/ca.crt`));
 
-    return connect(connectOptions);
+    const client = new grpc.Client(`localhost:${user.port}`, grpc.credentials.createSsl(tlsCert));
+    return connect({ identity: { mspId: user.msp, credentials: cert }, signer: signers.newPrivateKeySigner(crypto.createPrivateKey(privateKey)), client });
 }
 
-// --- MAIN LOGIN ENDPOINT ---
-app.post('/api/login-crypto', async (req, res) => {
-    const { certData } = req.body;
+// --- OPTIMIZED PIXEL EXTRACTOR ---
+async function extractHiddenData(imageBuffer) {
+    return new Promise(async (resolve, reject) => {
+        try {
+            const image = await Jimp.read(imageBuffer);
+            let binary = "";
+            let text = "";
+            const width = image.bitmap.width;
+            const height = image.bitmap.height;
+            const data = image.bitmap.data;
+            const totalPixels = width * height;
+
+            let i = 0;
+            
+            function processChunk() {
+                const start = Date.now();
+                
+                while (i < totalPixels && Date.now() - start < 15) {
+                    const blue = data[i * 4 + 2]; 
+                    binary += (blue & 1);
+
+                    
+                    if (binary.length % 8 === 0) {
+                        const byte = binary.slice(binary.length - 8);
+                        const char = String.fromCharCode(parseInt(byte, 2));
+                        text += char;
+
+                       
+                        if (text.length === MAGIC_HEADER.length) {
+                            if (text !== MAGIC_HEADER) {
+                                return resolve(null); 
+                            }
+                        }
+
+                        if (text.endsWith("|END|")) {
+                            return resolve(text.replace(MAGIC_HEADER, "").replace("|END|", ""));
+                        }
+                    }
+                    i++;
+                }
+
+                if (i < totalPixels) {
+                    setImmediate(processChunk);
+                } else {
+                    resolve(null);
+                }
+            }
+            processChunk();
+        } catch (e) { reject(e); }
+    });
+}
+
+// --- API ENDPOINT ---
+app.post('/api/stego-login', async (req, res) => {
+    const { imageData } = req.body;
     const logs = [];
-    
-    console.log(`\n--- NEW LOGIN ATTEMPT ---`);
-    logs.push(`📂 [System] Analyzing Uploaded X.509 Certificate...`);
-
-    // 1. VERIFY FILE
-    const role = getUserRoleFromCert(certData);
-
-    if (role === 'Unknown' || role === 'Error') {
-        logs.push(`❌ [Auth] CRITICAL: Certificate Signature Mismatch.`);
-        logs.push(`⛔ [Access] Denied. This ID is not trusted by the Root CA.`);
-        return res.json({ success: false, logs: logs, message: "Invalid Digital Identity" });
-    }
-
-    logs.push(`✅ [Auth] Identity Verified: ${role}`);
-    logs.push(`🔍 [System] Loading Wallet for ${role}...`);
+    logs.push(`🔬 [Stego] Scanning Pixels (Optimized)...`);
 
     try {
-        const gateway = await connectToNetwork(role, logs);
+        const buffer = Buffer.from(imageData.replace(/^data:image\/\w+;base64,/, ""), 'base64');
+        const encryptedText = await extractHiddenData(buffer);
+
+        if (!encryptedText) {
+            logs.push(`❌ [Stego] No Valid Header found.`);
+            return res.json({ success: false, logs, message: "Invalid / Clean Image" });
+        }
+
+        logs.push(`🛡️ [Crypto] Payload Found. Decrypting...`);
+        const decryptedCert = decrypt(encryptedText);
+
+        if (!decryptedCert) {
+            logs.push(`❌ [Crypto] Decryption Failed (Wrong Password).`);
+            return res.json({ success: false, logs, message: "Decryption Error" });
+        }
+
+        logs.push(`✅ [Crypto] Decrypted.`);
+        const user = getUserRoleFromCert(decryptedCert);
+
+        if (!user) {
+            logs.push(`⛔ [Auth] Unauthorized Identity.`);
+            return res.json({ success: false, logs, message: "Unauthorized" });
+        }
+
+        logs.push(`👤 [Auth] Verified: ${user.role}`);
+        const gateway = await connectToNetwork(user);
         const network = gateway.getNetwork(channelName);
         const contract = network.getContract(chaincodeName);
         
-        logs.push(`📡 [Chaincode] Connected. Querying 'ReadBalance'...`);
-        
-        // EVALUATE TRANSACTION
         const resultBytes = await contract.evaluateTransaction('ReadBalance');
         const resultJson = JSON.parse(new TextDecoder().decode(resultBytes));
-        
-        logs.push(`💰 [Ledger] Success. Private Data Decrypted.`);
-        res.json({ success: true, logs: logs, data: resultJson, role: role });
 
-    } catch (error) {
-        logs.push(`❌ [Error] ${error.message}`);
-        res.json({ success: false, logs: logs, message: "Query Failed" });
+        logs.push(`💰 [Vault] Balance: ${resultJson.value} USDT`);
+        res.json({ success: true, logs, data: resultJson, role: user.role });
+
+    } catch (e) {
+        logs.push(`❌ [Error] ${e.message}`);
+        res.json({ success: false, logs });
     }
 });
 
-// Serve HTML
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
-
-app.listen(3000, () => {
-    console.log('🚀 USDT Vault Server running at http://localhost:3000');
-});
+app.listen(3000, () => console.log('🚀 Optimized Stego-Server running at http://localhost:3000'));

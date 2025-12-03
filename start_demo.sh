@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# --- ⚠️ CRITICAL FIX: EXPORT GO PATH ---
+# This ensures the script can find Go to package the chaincode
+export PATH=$PATH:/usr/local/go/bin
+
 # --- CONFIGURATION: ABSOLUTE PATHS ---
 export BASE_DIR=$HOME/fabric-samples/test-network
 export CODE_DIR=$HOME/fabric-samples/asset-transfer-private-data/chaincode-go/usdt-secret
@@ -24,6 +28,7 @@ echo "🌐 Starting Bank A and Bank B..."
 # 4. ADD THE REGULATOR (Org3)
 echo "⚖️  Spinning up the Regulator Node..."
 cd addOrg3
+# Note: addOrg3.sh does NOT support the -i flag, so we run it plain
 ./addOrg3.sh up -c mychannel
 cd $BASE_DIR
 
@@ -34,6 +39,7 @@ echo "✅ Network Fully Assembled (3 Orgs)."
 
 # 5. DEPLOY SMART CONTRACT
 echo "📜 Deploying Smart Contract with 3-Org Policy..."
+# We use the -i flag here to ensure correct peer versions for deployment
 ./network.sh deployCC \
 -ccn usdt-secret \
 -ccp $CODE_DIR \
